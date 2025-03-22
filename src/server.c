@@ -19,21 +19,32 @@
 
 static int serve(const char *restrict, int);
 static int process_request(int, char*);
+static int root(int);
 
 struct ht_buf{
 char *buf;
 size_t size;
 };
-struct ht_buf htbuf;
 
+struct route{
+    char *name;
+    void *func;
+};
+
+struct ht_buf htbuf;
+const struct route routes[] = { {"/", &root} };
+size_t routelen = 1;
+
+/* TODO: make more robust, error handling, noexcept, threads?
+ * more dynamic content serving? (instead of malloc and reading into heap buffer) */
 
 void init_html()
 {
-    htbuf.buf = (char*)malloc(2048);
-    htbuf.size = 2048;
+    htbuf.buf = (char*)malloc(4096);
+    htbuf.size = 4096;
 
-    char *linebuf = (char*)malloc(128);
-    size_t lbsz = 128;
+    char *linebuf = (char*)malloc(256);
+    size_t lbsz = 256;
 
     FILE* ws = fopen("index.html", "r");
     if(!ws){
@@ -46,28 +57,44 @@ void init_html()
     //return htbuf;
 
 }
+/* ROUTES */
+int root(int fd){
 
-int
-serve(const char *restrict path, int filedes)
-{
-
-char* ok = (char*)malloc(htbuf.size+60);
-snprintf(ok, htbuf.size+60,"HTTP/1.1 200 OK\nContent-Length: 900\nContent-Type: text/html\n\n \
+/* EDIT CONTENT LENGTH TO MATCH */
+    char* ok = (char*)malloc(htbuf.size+60);
+    snprintf(ok, htbuf.size+60,"HTTP/1.1 200 OK\nContent-Length: 1178\nContent-Type: text/html\nCache-Control: no-store\n\n\
 %s", htbuf.buf);
 
-   /* const char *ok = "HTTP/1.1 200 OK\nContent-Length: 70\nContent-Type: text/html\n\n\
-<!DOCTYPE html>\n<html lang=en>\n<body>\n<h1> Hello there </h1>\n</body>\n</html>";
-*/
+    fprintf(stderr, "serving client: %s", ok); //debug print
 
-    if(!strncmp(path, "/", 1)){
-        fprintf(stderr, "serving ok: %s", ok);
-        if((write(filedes, ok, strlen(ok))) < 0){
-            perror("Failed to send response");
-            return -1;
-        }
+    if((write(fd, ok, strlen(ok))) < 0){
+        perror("root: Failed to send response");
+        return -1;
     }
 
     return 0;
+}
+
+/**  SERVER  **/
+
+/* Matches the HTTP request path with a function to serve said path;
+ * return values: 1 for no matches, 0 for success, -1 for failure */
+int
+serve(const char *restrict path, int filedes)
+{
+/* TODO: Add function pointers with an allowed routes struct, see code/play for implementation */
+
+    size_t i;
+    int(* funcptr)(int);
+    int retval=1;
+    for(i=0; i<routelen; i++){
+        funcptr = routes[i].func;
+        if(!strcmp(path, routes[i].name)){
+            retval = funcptr(filedes);
+        }
+    }
+
+    return retval;
 }
 
 int
