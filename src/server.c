@@ -1,5 +1,4 @@
 
-#include <complex.h>
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -11,8 +10,8 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <string.h>
-#include "sock.c"
 #include <aio.h>
+#include "sock.c"
 
 #define PORT    8000
 #define MAXMSG  512
@@ -28,44 +27,72 @@ size_t size;
 
 struct route{
     char *name;
-    void *func;
+    int (*func)(int);
+    struct ht_buf htbuf;
+    size_t docsz;
 };
 
-struct ht_buf htbuf;
-const struct route routes[] = { {"/", &root} };
-size_t routelen = 1;
+
+struct route routes[] = { {"/", &root, {0, 0}, 0} };
+const size_t routelen = 1;
 
 /* TODO: make more robust, error handling, noexcept, threads?
  * more dynamic content serving? (instead of malloc and reading into heap buffer) */
 
-void init_html()
+void init_html(const char *file, struct route *route)
 {
-    htbuf.buf = (char*)malloc(4096);
-    htbuf.size = 4096;
+    // consider iteration
+
+    route->docsz = 0;
+    int i;
+
+    route->htbuf.buf = (char*)malloc(4096);
+    if(!route->htbuf.buf){
+        perror("Out of memory");
+        exit(EXIT_FAILURE);
+    }
+
+    route->htbuf.size = 4096;
+
+    unsigned int c = 0;
 
     char *linebuf = (char*)malloc(256);
     size_t lbsz = 256;
 
-    FILE* ws = fopen("index.html", "r");
+    FILE* ws = fopen(file, "r");
     if(!ws){
-        perror("Failed to open index.html");
+        perror("Failed to open html file");
         exit(EXIT_FAILURE);
     }
-    while(getline(&linebuf, &lbsz, ws) != -1){
-        strcat(htbuf.buf, linebuf);
+
+    while((i = getline(&linebuf, &lbsz, ws)) != -1){
+        c++;
+        if(c == route->htbuf.size){
+            route->htbuf.buf = realloc(route->htbuf.buf, route->htbuf.size*2);
+            route->htbuf.size *= 2;
+        }
+
+        route->docsz += i;
+        strcat(route->htbuf.buf, linebuf);
     };
     //return htbuf;
 
 }
+
 /* ROUTES */
-int root(int fd){
-
+int root(const int fd)
+{
+    fprintf(stderr, "in root\n");
+    struct ht_buf *htbuf = &routes[0].htbuf;
 /* EDIT CONTENT LENGTH TO MATCH */
-    char* ok = (char*)malloc(htbuf.size+60);
-    snprintf(ok, htbuf.size+60,"HTTP/1.1 200 OK\nContent-Length: 1178\nContent-Type: text/html\nCache-Control: no-store\n\n\
-%s", htbuf.buf);
+    char* ok = (char*)malloc(htbuf->size+60);
 
-    fprintf(stderr, "serving client: %s", ok); //debug print
+    fprintf(stderr, "htbuf size: %lu, route docsz: %lu, htbuf->buf: %s", htbuf->size, routes[0].docsz, htbuf->buf);
+
+    snprintf(ok, htbuf->size+60,"HTTP/1.1 200 OK\nContent-Length: %lu\nContent-Type: text/html\nCache-Control: no-store\n\n\
+%s", routes[0].docsz, htbuf->buf);
+
+    fprintf(stderr, "serving client %s", ok); //debug print
 
     if((write(fd, ok, strlen(ok))) < 0){
         perror("root: Failed to send response");
@@ -80,17 +107,13 @@ int root(int fd){
 /* Matches the HTTP request path with a function to serve said path;
  * return values: 1 for no matches, 0 for success, -1 for failure */
 int
-serve(const char *restrict path, int filedes)
+serve(const char *restrict path, const int filedes)
 {
-/* TODO: Add function pointers with an allowed routes struct, see code/play for implementation */
-
     size_t i;
-    int(* funcptr)(int);
     int retval=1;
     for(i=0; i<routelen; i++){
-        funcptr = routes[i].func;
         if(!strcmp(path, routes[i].name)){
-            retval = funcptr(filedes);
+            retval = routes[i].func(filedes);
         }
     }
 
@@ -98,7 +121,7 @@ serve(const char *restrict path, int filedes)
 }
 
 int
-process_request(int filedes, char *buffer)
+process_request(const int filedes, char *buffer)
 {
     char *path;
     char *token;
@@ -113,19 +136,20 @@ process_request(int filedes, char *buffer)
 
                token = strtok(NULL, delim);
                //fprintf(stderr, "third token: '%s'\n", token);
-               if(!strncmp(token, "HTTP/1.1", 8))
+               if(!strncmp(token, "HTTP", 4))
                    serve(path, filedes);
     }
     else {
         if(write(filedes, br, strlen(br)) < 0)
             perror("in process_request -> else -> write");
+        return -1;
     }
 
-return 0;
+    return 0;
 }
 
 int
-read_from_client (int filedes)
+read_from_client (const int filedes)
 {
        char *buffer = (char*)malloc(MAXMSG);
        int nbytes;
@@ -137,21 +161,19 @@ read_from_client (int filedes)
            exit (EXIT_FAILURE);
          }
        else if (nbytes == 0)
-         /* End-of-file. */
-         return -1;
+           /* End-of-file. */
+           return -1;
        else {
-           /* Data read. PARSE HTTP HERE */
-           /* tokenize (strtok?)  */
            fprintf (stderr, "Server: got message: `%s'\n", buffer);
-
-           process_request(filedes, buffer);
-           /* GET /path HTTP/1.1 */
-           return 0;
+           if(process_request(filedes, buffer) < 0)
+               return 1;
          }
-     }
+
+       return 0;
+}
 
 int
-main (void)
+main (int argc, char *argv[])
 {
        extern int make_socket (uint16_t port);
        int sock;
@@ -161,7 +183,19 @@ main (void)
        socklen_t size;
 
        /* Initialize HTML file by reading it into buffer */
-       init_html();
+       int c;
+       char *html = "index.html";
+       while((c = getopt(argc, argv, "f:") ) != -1)
+           switch(c){
+           case 'f':
+               html = optarg;
+               break;
+            case '?':
+                puts("Unknown argument");
+                exit(EXIT_FAILURE);
+                break;
+           }
+       init_html(html, &routes[0]);
 
        /* Create the socket and set it up to accept connections. */
        sock = make_socket (PORT);
