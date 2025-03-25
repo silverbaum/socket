@@ -11,7 +11,7 @@
 #include <arpa/inet.h>
 #include <string.h>
 #include <aio.h>
-#include "server.h"
+#include "sock.h"
 
 
 #define MAXMSG  512

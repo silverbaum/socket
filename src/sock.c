@@ -1,4 +1,3 @@
-#include <asm-generic/socket.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
