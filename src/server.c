@@ -11,14 +11,10 @@
 #include <arpa/inet.h>
 #include <string.h>
 #include <aio.h>
-#include "sock.c"
+#include "server.h"
 
-#define PORT    8000
+
 #define MAXMSG  512
-
-static int serve(const char *restrict, int);
-static int process_request(int, char*);
-static int root(int);
 
 struct ht_buf{
 char *buf;
@@ -32,32 +28,47 @@ struct route{
     size_t docsz;
 };
 
+static void init_html(const char *file, struct route *route);
+static int root(const int fd);
+static int serve(const char *restrict path, const int fd);
+static int process_request(int filedes, char *buffer);
+static int read_from_client(const int filedes);
 
-struct route routes[] = { {"/", &root, {0, 0}, 0} };
-const size_t routelen = 1;
+static short PORT = 8000;
+static struct route routes[] = { {"/", &root, {NULL, 0}, 0} };
+static const size_t routelen = 1;
 
-/* TODO: make more robust, error handling, noexcept, threads?
- * more dynamic content serving? (instead of malloc and reading into heap buffer) */
+/* TODO: make more robust, error handling, noexcept, threads? */
+/* TODO: enable serving content from a directory (templates) ? */
 
+/*
+ * Load HTML files into memory for a particular route
+ * file: the name of the html file to be loaded,
+ * route: pointer to the route to which the html file should be connected
+ */
 void init_html(const char *file, struct route *route)
 {
     // consider iteration
+    ssize_t i;
+    unsigned int c;
+
+    i = 0;
+    c = 0;
 
     route->docsz = 0;
-    int i;
-
     route->htbuf.buf = (char*)malloc(4096);
     if(!route->htbuf.buf){
         perror("Out of memory");
-        exit(EXIT_FAILURE);
+        return;
     }
 
     route->htbuf.size = 4096;
 
-    unsigned int c = 0;
 
     char *linebuf = (char*)malloc(256);
     size_t lbsz = 256;
+
+    char *buf = route->htbuf.buf;
 
     FILE* ws = fopen(file, "r");
     if(!ws){
@@ -67,14 +78,19 @@ void init_html(const char *file, struct route *route)
 
     while((i = getline(&linebuf, &lbsz, ws)) != -1){
         c++;
-        if(c == route->htbuf.size){
+        if(c+i >= route->htbuf.size){
             route->htbuf.buf = realloc(route->htbuf.buf, route->htbuf.size*2);
+            if(!route->htbuf.buf){
+                    perror("Out of memory! Failed to load html");
+                    return;
+            }
             route->htbuf.size *= 2;
         }
 
         route->docsz += i;
-        strcat(route->htbuf.buf, linebuf);
-    };
+        //strcat(route->htbuf.buf, linebuf);
+        buf = stpcpy(buf, linebuf);
+    }
     //return htbuf;
 
 }
@@ -159,15 +175,20 @@ read_from_client (const int filedes)
            /* Read error. */
            perror ("read");
            exit (EXIT_FAILURE);
-         }
-       else if (nbytes == 0)
+
+       } else if (nbytes == 0){
            /* End-of-file. */
+           free(buffer);
            return -1;
-       else {
+       } else {
+           if(nbytes+1<MAXMSG)
+               buffer[nbytes+1] = '\0';
            fprintf (stderr, "Server: got message: `%s'\n", buffer);
-           if(process_request(filedes, buffer) < 0)
+           if(process_request(filedes, buffer) < 0){
+               free(buffer);
                return 1;
-         }
+           }
+       }
 
        return 0;
 }
@@ -175,7 +196,7 @@ read_from_client (const int filedes)
 int
 main (int argc, char *argv[])
 {
-       extern int make_socket (uint16_t port);
+       //extern int make_socket (uint16_t port);
        int sock;
        fd_set active_fd_set, read_fd_set;
        int i;
@@ -185,10 +206,13 @@ main (int argc, char *argv[])
        /* Initialize HTML file by reading it into buffer */
        int c;
        char *html = "index.html";
-       while((c = getopt(argc, argv, "f:") ) != -1)
+       while((c = getopt(argc, argv, "p:f:") ) != -1)
            switch(c){
            case 'f':
                html = optarg;
+               break;
+           case 'p':
+               PORT = atoi(optarg);
                break;
             case '?':
                 puts("Unknown argument");
