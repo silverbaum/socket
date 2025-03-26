@@ -1,14 +1,20 @@
 
+CC=gcc
+CFLAGS= -Wall
 OBJDIR=src
+
+OBJS= server.o sock.o util.o
 
 all: server
 
-server: server.o sock.o
-	cc -o server server.o sock.o
+server: $(OBJS)
+	$(CC) $(CFLAGS) -o server server.o sock.o util.o
 server.o: 
-	cc -c -o server.o $(OBJDIR)/server.c 
+	$(CC) $(CFLAGS) -c $(OBJDIR)/server.c 
 sock.o: 
-	cc -c -o sock.o $(OBJDIR)/sock.c
+	$(CC) $(CFLAGS) -c $(OBJDIR)/sock.c
+util.o: 
+	$(CC) $(CFLAGS) -c $(OBJDIR)/util.c
 clean:
 	rm *.o
 

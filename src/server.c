@@ -13,8 +13,16 @@
 #include <aio.h>
 
 #include "sock.h"
+#include "util.h"
 
 #define MAXMSG 512
+
+#ifdef DEBUG
+#define dfprintf fprintf
+#endif
+#ifndef DEBUG
+static void dfprintf(FILE *restrict stream, const char *restrict format, ...) {return;}
+#endif
 
 struct ht_buf {
 	char *buf;
@@ -34,7 +42,7 @@ static int serve(const char *restrict path, const int fd);
 static int process_request(int filedes, char *buffer);
 static int read_from_client(const int filedes);
 
-static short PORT = 8000;
+static unsigned short PORT = 8000;
 static struct route routes[] = { { "/", &root, { NULL, 0 }, 0 } };
 static const size_t routelen = 1;
 
@@ -50,59 +58,59 @@ void
 init_html(const char *file, struct route *route)
 {
 	ssize_t i;
-	unsigned int c;
+	char *buf;
+	char *linebuf;
+	size_t lbsz;
+	FILE *ws;
 
-	i = 0;
-	c = 0;
 
 	route->docsz = 0;
-	route->htbuf.buf = (char *)malloc(4096);
+	route->htbuf.buf = (char *)xmalloc(4096);
 	if (!route->htbuf.buf) {
 		perror("Out of memory");
 		return;
 	}
 
-	char *buf = route->htbuf.buf;
 	route->htbuf.size = 4096;
+	
+	buf = route->htbuf.buf;
+	linebuf = (char*)xmalloc(256);
+	lbsz = 256;
 
-	char *linebuf = (char *)malloc(256);
-	size_t lbsz = 256;
-
-
-	FILE *ws = fopen(file, "r");
+	
+	ws = fopen(file, "r");
 	if (!ws) {
 		perror("Failed to open html file");
 		exit(EXIT_FAILURE);
 	}
 
 	while ((i = getline(&linebuf, &lbsz, ws)) != -1) {
-		c++;
-		if (c + i >= route->htbuf.size) {
-			route->htbuf.buf = realloc(route->htbuf.buf,
-						   route->htbuf.size * 2);
-			if (!route->htbuf.buf) {
-				perror("Out of memory! Failed to load html");
-				return;
-			}
-			route->htbuf.size *= 2;
-		}
 
+		dfprintf(stderr, "docsz: %lu\n", route->docsz);
+		if(route->docsz+i >= route->htbuf.size){
+			dfprintf(stderr, "reallocating, docsz: %lu, i: %lu\n", route->docsz, i);
+			route->htbuf.buf = xrealloc(route->htbuf.buf, (route->htbuf.size*2));
+			route->htbuf.size *= 2;
+
+			dfprintf(stderr, "setting buf = to buf[%lu]", route->docsz);
+			buf = &route->htbuf.buf[route->docsz];
+		}
 		route->docsz += i;
 		buf = stpcpy(buf, linebuf);
 	}
+	free(linebuf);
 }
 
 /* ROUTES */
 int
 root(const int fd)
 {
-	fprintf(stderr, "in root\n");
+	dfprintf(stderr, "in root\n");
 	struct ht_buf *htbuf = &routes[0].htbuf;
-	/* EDIT CONTENT LENGTH TO MATCH */
-	char *ok = (char *)malloc(htbuf->size + 60);
+	char *ok = (char *)xmalloc(htbuf->size + 60);
 
-	fprintf(stderr, "htbuf size: %lu, route docsz: %lu, htbuf->buf: %s",
-		htbuf->size, routes[0].docsz, htbuf->buf);
+	dfprintf(stderr, "htbuf size: %lu, route docsz: %lu, routes[0].htbuf.buf: %s\n",
+		htbuf->size, routes[0].docsz, routes[0].htbuf.buf);
 
 	snprintf(
 		ok, htbuf->size + 60,
@@ -110,13 +118,13 @@ root(const int fd)
 %s",
 		routes[0].docsz, htbuf->buf);
 
-	fprintf(stderr, "serving client %s", ok); //debug print
+	dfprintf(stderr, "serving client %s", ok); //debug print
 
 	if ((write(fd, ok, strlen(ok))) < 0) {
 		perror("root: Failed to send response");
 		return -1;
 	}
-
+	free(ok);
 	return 0;
 }
 
@@ -168,8 +176,8 @@ process_request(const int filedes, char *buffer)
 int
 read_from_client(const int filedes)
 {
-	char *buffer = (char *)malloc(MAXMSG);
-	int nbytes;
+	char *buffer = (char *)xmalloc(MAXMSG);
+	long nbytes;
 
 	nbytes = read(filedes, buffer, MAXMSG);
 	if (nbytes < 0) {
@@ -212,12 +220,12 @@ main(int argc, char *argv[])
 			html = optarg;
 			break;
 		case 'p':
-			PORT = atoi(optarg);
+			PORT = (unsigned short)atoi(optarg);
 			break;
 		case '?':
 			puts("Unknown argument");
+			//help();
 			exit(EXIT_FAILURE);
-			break;
 		}
 	init_html(html, &routes[0]);
 

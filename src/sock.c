@@ -4,6 +4,8 @@
 #include <netinet/in.h>
 #include <netdb.h>
 
+#include "sock.h"
+
 extern void init_sockaddr(struct sockaddr_in *, const char *, unsigned int );
 extern int make_socket(unsigned short int);
 
