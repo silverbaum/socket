@@ -40,7 +40,7 @@ static void load_file(const char *file, struct route *route);
 /* Route function prototypes */
 static int root(const int fd);
 static int js(const int fd);
-/*                               */
+/*                           */
 static int serve(const char *restrict path, const int fd);
 static int process_request(int filedes, char *buffer);
 static int read_from_client(const int filedes);
@@ -64,17 +64,11 @@ load_file(const char *file, struct route *route)
 	size_t lbsz;
 	FILE *ws;
 
-
 	route->docsz = 0;
 	route->htbuf.buf = (char *)xmalloc(4096);
-	if (!route->htbuf.buf) {
-		perror("Out of memory");
-		return;
-	}
-
 	route->htbuf.size = 4096;
 	
-	buf = route->htbuf.buf;
+	buf = route->htbuf.buf; // pointer for stpcpy
 	linebuf = (char*)xmalloc(256);
 	lbsz = 256;
 
@@ -87,9 +81,8 @@ load_file(const char *file, struct route *route)
 	}
 
 	while ((i = getline(&linebuf, &lbsz, ws)) != -1) {
-
 		dfprintf(stderr, "docsz: %lu\n", route->docsz);
-		if(route->docsz+i >= route->htbuf.size){
+		if (route->docsz+i >= route->htbuf.size){
 			dfprintf(stderr, "reallocating, docsz: %lu, i: %lu\n", route->docsz, i);
 			route->htbuf.buf = xrealloc(route->htbuf.buf, (route->htbuf.size*2));
 			route->htbuf.size *= 2;
@@ -101,11 +94,11 @@ load_file(const char *file, struct route *route)
 		buf = stpcpy(buf, linebuf);
 	}
 	free(linebuf);
-	if(fclose(ws) == EOF)
+	if (fclose(ws) == EOF)
 		perror("fclose");
 }
 
-/* ROUTES */
+/* Route function definitions */
 int
 root(const int fd)
 {
@@ -122,7 +115,7 @@ root(const int fd)
 %s",
 		routes[0].docsz, htbuf->buf);
 
-	dfprintf(stderr, "serving client %s", ok); //debug print
+	dfprintf(stderr, "serving client %s", ok);
 
 	if ((write(fd, ok, strlen(ok))) < 0) {
 		perror("root: Failed to send response");
