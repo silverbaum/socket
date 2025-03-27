@@ -36,26 +36,27 @@ struct route {
 	size_t docsz;
 };
 
-static void init_html(const char *file, struct route *route);
+static void load_file(const char *file, struct route *route);
+/* Route function prototypes */
 static int root(const int fd);
+static int js(const int fd);
+/*                               */
 static int serve(const char *restrict path, const int fd);
 static int process_request(int filedes, char *buffer);
 static int read_from_client(const int filedes);
 
 static unsigned short PORT = 8000;
-static struct route routes[] = { { "/", &root, { NULL, 0 }, 0 } };
-static const size_t routelen = 1;
-
-/* TODO: make more robust, error handling, noexcept, threads? */
-/* TODO: enable serving content from a directory (templates) ? */
+/* Add routes here */
+static struct route routes[] = { {"/", &root, { NULL, 0 }, 0}, {"/index.js", &js, {NULL, 0}, 0} };
+static const size_t routelen = sizeof(routes) / sizeof(struct route);
 
 /*
  * Load HTML files into memory for a particular route
  * file: the name of the html file to be loaded,
- * route: pointer to the route to which the html file should be connected
+ * route: pointer to the route struct to which the file should be connected
  */
 void
-init_html(const char *file, struct route *route)
+load_file(const char *file, struct route *route)
 {
 	ssize_t i;
 	char *buf;
@@ -80,8 +81,9 @@ init_html(const char *file, struct route *route)
 	
 	ws = fopen(file, "r");
 	if (!ws) {
-		perror("Failed to open html file");
-		exit(EXIT_FAILURE);
+		fprintf(stderr, "Failed to open %s", file);
+		perror(" file");
+		return;
 	}
 
 	while ((i = getline(&linebuf, &lbsz, ws)) != -1) {
@@ -99,6 +101,8 @@ init_html(const char *file, struct route *route)
 		buf = stpcpy(buf, linebuf);
 	}
 	free(linebuf);
+	if(fclose(ws) == EOF)
+		perror("fclose");
 }
 
 /* ROUTES */
@@ -128,6 +132,31 @@ root(const int fd)
 	return 0;
 }
 
+int
+js(const int fd)
+{
+	struct ht_buf *htbuf = &routes[1].htbuf;
+	char *ok = (char *)xmalloc(htbuf->size + 100);
+
+	dfprintf(stderr, "htbuf size: %lu, route docsz: %lu, routes[0].htbuf.buf: %s\n",
+		htbuf->size, routes[1].docsz, routes[1].htbuf.buf);
+
+	snprintf(
+		ok, htbuf->size + 100,
+		"HTTP/1.1 200 OK\nContent-Length: %lu\nContent-Type: text/javascript\nCache-Control: no-store\n\n\
+%s",
+		routes[1].docsz, htbuf->buf);
+
+	dfprintf(stderr, "serving client %s", ok);
+
+	if ((write(fd, ok, strlen(ok))) < 0) {
+		perror("root: Failed to send response");
+		return -1;
+	}
+	free(ok);
+	return 0;
+}
+
 /**  SERVER  **/
 
 /* Matches the HTTP request path with a function to serve said path;
@@ -138,6 +167,7 @@ serve(const char *restrict path, const int filedes)
 	size_t i;
 	int retval = 1;
 	for (i = 0; i < routelen; i++) {
+		dfprintf(stderr, "path: %s; routes[%lu].name = %s", path, i, routes[i].name);
 		if (!strcmp(path, routes[i].name)) {
 			retval = routes[i].func(filedes);
 		}
@@ -211,7 +241,7 @@ main(int argc, char *argv[])
 	struct sockaddr_in clientname;
 	socklen_t size;
 
-	/* Initialize HTML file by reading it into buffer */
+	
 	int c;
 	char *html = "index.html";
 	while ((c = getopt(argc, argv, "p:f:")) != -1)
@@ -227,7 +257,15 @@ main(int argc, char *argv[])
 			//help();
 			exit(EXIT_FAILURE);
 		}
-	init_html(html, &routes[0]);
+
+	/* Read files to memory */
+	char *rn;
+	load_file(html, &routes[0]);
+	for(i=1; i<routelen; i++){
+		rn = &routes[i].name[i];
+		load_file(rn, &routes[i]);
+	}
+
 
 	/* Create the socket and set it up to accept connections. */
 	sock = make_socket(PORT);
