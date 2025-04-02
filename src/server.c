@@ -50,15 +50,10 @@ static inline int read_from_client(const int filedes);
 /* Add routes here */
 static struct route routes[] ={
 {.name="/", .type="text/html"},
-{.name="/index.js", .type="text/javascript"},
-{.name="/ind.html", .type="text/html"}
+{.name="/index.js", .type="text/javascript"}
 };
-/*{
-{"/",    {NULL, 0 , "text/html"},           0},
-{"/index.js", {NULL, 0, "text/javascript"}, 0},
-{.name="/ind.html", .htbuf={.type="text/html"}}
-};
-*/
+/* TODO: adding routes that arent filenames requires manual loading,
+ * separation between file and route name (add struct field?) */
 
 static const size_t routelen = sizeof(routes) / sizeof(struct route);
 
