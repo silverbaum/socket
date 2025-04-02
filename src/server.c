@@ -1,11 +1,16 @@
+/* Copyright 2025 Topias Silfverhuth
+ * SPDX-License-Identifier: GPL-2.0-or-later */
+#define _GNU_SOURCE
+#define _FORTIFY_SOURCE 1
+#define __linux__ 1
 
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <fcntl.h>
-#include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/epoll.h>
 #include <netinet/in.h>
 #include <netdb.h>
 #include <arpa/inet.h>
@@ -16,7 +21,10 @@
 #include "sock.h"
 #include "util.h"
 
-#define MAXMSG 1024
+#define MAXMSG 2048
+#define MAX_EVENTS 1024
+#define DEFAULT_BUFSIZE 4096
+
 
 #ifdef DEBUG
 #define dfprintf fprintf
@@ -69,8 +77,8 @@ load_file(const char *file, struct route *route)
 	FILE *ws;
 
 	route->docsz = 0;
-	route->buf = (char *)xmalloc(4096);
-	route->bufsize = 4096;
+	route->buf = (char *)xmalloc(DEFAULT_BUFSIZE);
+	route->bufsize = DEFAULT_BUFSIZE;
 	
 	buf = route->buf; // pointer for stpcpy
 	linebuf = (char*)xmalloc(256);
@@ -171,9 +179,9 @@ process_request(const int filedes, char *buffer)
 	if (strncmp(token, "HTTP", 4))
 			write(filedes, br, 25);
 
-	if (!strncmp(buffer, "GET", 3)) {
+	if (!strncmp(method, "GET", 3)) {
 		serve(path, filedes);
-	} else if(!strncmp(buffer, "POST", 4)){
+	} else if(!strncmp(method, "POST", 4)){
 		serve(path, filedes);
 	} else {
 		if (write(filedes, br, strlen(br)) < 0)
@@ -213,19 +221,25 @@ read_from_client(const int filedes)
 	return 0;
 }
 
+/* epoll instance, an in-kernel data structure */
 int
 main(int argc, char *argv[])
 {
-	int sock;
-	fd_set active_fd_set, read_fd_set;
-	int i;
-	size_t j;
-	struct sockaddr_in clientname;
-	socklen_t size;
-    unsigned short PORT = 8000;
+	int sock, conn, nfds, epollfd;
+	struct epoll_event ev, events[MAX_EVENTS];
 
-	int c;
-	char *html = "index.html"; //TODO: File handling
+	int i, c;
+	size_t j;
+
+	struct sockaddr_in clientname;
+	socklen_t addrsize;
+
+	char *html;
+    unsigned short PORT;
+
+	PORT = 8000;
+	html = "index.html";
+
 	while ((c = getopt(argc, argv, "p:f:")) != -1)
 		switch (c) {
 		case 'f':
@@ -257,43 +271,65 @@ main(int argc, char *argv[])
 		exit(EXIT_FAILURE);
 	}
 
-	/* Initialize the set of active sockets. */
-	FD_ZERO(&active_fd_set);
-	FD_SET(sock, &active_fd_set);
+
+	if ((epollfd = epoll_create1(0)) < 0) {
+		perror("epoll_create1");
+		exit(EXIT_FAILURE);
+	}
+
+	/* events struct is a bit mask to the set "event types"/settings on the socket
+	 * EPOLLIN: The fd(sock) is available for read operations.*/
+	ev.events = EPOLLIN;
+	/* connect the created ipv4 socket to the epoll event object */
+	ev.data.fd = sock;
+	/* Add the socket to the "interest list" of the epoll file descriptor
+	 * according to the settings in the ev epoll_event struct */
+	if(epoll_ctl(epollfd, EPOLL_CTL_ADD, sock, &ev) == -1){
+		perror("epoll_ctl: sock");
+		exit(EXIT_FAILURE);
+	}
+
 
 	while (1) {
-		/* Block until input arrives on one or more active sockets. */
-		read_fd_set = active_fd_set;
-		if (select(FD_SETSIZE, &read_fd_set, NULL, NULL, NULL) < 0) {
-			perror("select");
+		/* Block until input arrives on one or more active sockets,
+		 * similar to select */
+		if ((nfds = epoll_wait(epollfd, events, MAX_EVENTS, -1)) < 0){
+			perror("epoll_wait");
 			exit(EXIT_FAILURE);
 		}
 
 		/* Service all the sockets with input pending. */
-		for (i = 0; i < FD_SETSIZE; ++i)
-			if (FD_ISSET(i, &read_fd_set)) {
-				if (i == sock) {
-					/* Connection request on original socket. */
-					int new;
-					size = sizeof(clientname);
-					new = accept(
+		for (i = 0; i < nfds; ++i){
+			if (events[i].data.fd == sock){
+					addrsize = sizeof(clientname);
+					conn = accept(
 						sock,
 						(struct sockaddr *)&clientname,
-						&size);
-					if (new < 0) {
+						&addrsize);
+					if (conn < 0) {
 						perror("accept");
 						exit(EXIT_FAILURE);
 					}
+					/* set nonblocking IO on the connected socket which
+					 * is necessary for edge-triggered mode (EPOLLET) which
+					 * delivers events only when changes occur on the monitored file descriptor */
+					fcntl(conn, F_SETFL, O_NONBLOCK);
+					ev.events = EPOLLIN | EPOLLET;
+					ev.data.fd = conn;
+					if(epoll_ctl(epollfd, EPOLL_CTL_ADD, conn, &ev) == -1){
+						perror("epoll_ctl: conn");
+						exit(EXIT_FAILURE);
+					}
+
 					fprintf(stderr,
 						"Server: connect from host %s, port %hd.\n",
 						inet_ntoa(clientname.sin_addr),
 						ntohs(clientname.sin_port));
-					FD_SET(new, &active_fd_set);
 				} else {
 					/* Data arriving on an already-connected socket. */
-					if (read_from_client(i) < 0) {
-						close(i);
-						FD_CLR(i, &active_fd_set);
+					if (read_from_client(events[i].data.fd) < 0) {
+						close(events[i].data.fd);
+						epoll_ctl(epollfd, EPOLL_CTL_DEL, events[i].data.fd, &ev);
 					}
 				}
 			}
