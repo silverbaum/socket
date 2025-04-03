@@ -59,7 +59,8 @@ static struct route routes[] ={
 {.name="/img.png", .mime="image/png"}
 };
 /* TODO: adding routes that arent filenames requires manual loading,
- * separation between filename and route name (add struct field?) */
+ * separation between filename and route name (add struct field?) 
+ * + loading files in runtime*/
 
 static const size_t routelen = sizeof(routes) / sizeof(struct route);
 
@@ -68,71 +69,39 @@ static const size_t routelen = sizeof(routes) / sizeof(struct route);
  * file: the name of the html file to be loaded,
  * route: pointer to the route struct to which the file should be connected
  */
+
 void
 load_file(const char *file, struct route *route)
 {
+	int fd;
 	ssize_t i;
-	char *buf;
-	char *linebuf;
-	size_t lbsz;
-	FILE *ws;
 	char *file_type;
 
 	route->docsize = 0;
 	route->buf = (char *)xmalloc(DEFAULT_BUFSIZE);
 	route->bufsize = DEFAULT_BUFSIZE;
-	
-	buf = route->buf; // pointer for stpcpy
-	linebuf = (char*)xmalloc(256);
-	lbsz = 256;
 
+	if (!route->mime)
+		asprintf(&route->mime, "None");
+		
 
-	ws = fopen(file, "r");
-	if (!ws) {
+	fd = open(file, O_RDONLY);
+	if (fd < 0) {
 		fprintf(stderr, "Failed to open %s\n", file);
-		perror(" fopen");
+		perror(" open");
 		return;
 	}
 
 	file_type = strchr(file, '.');
 	dfprintf(stderr, "extension: %s\n", file_type);
-
-	if (!strncmp(file_type, ".png", 4)){
-
-		for(i=0; (fscanf(ws, "%c", &route->buf[i])) != EOF; i++, route->docsize++){
-			//dfprintf(stderr, "docsz: %lu\n", route->docsz);
-			if(route->docsize+1 >= route->bufsize){
-				route->buf = xrealloc(route->buf, route->bufsize*2);
-				route->bufsize*=2;
-				buf = &route->buf[route->docsize];
-			}
-
-			//buf = mempcpy(buf, &c, 1);
-			dfprintf(stderr, "%d", buf[i]);
+	
+	for(i=0; (read(fd, &route->buf[i], 1)) > 0; i++, route->docsize++)
+		if(route->docsize+1 >= route->bufsize){
+				dfprintf(stderr, "reallocating, docsz: %lu, i: %lu\n", route->docsize, i);
+				route->buf = xrealloc(route->buf, route->bufsize*=2);
 		}
 
-		free(linebuf);
-		return;
-	}
-
-	/*   */
-
-	while ((i = getline(&linebuf, &lbsz, ws)) != -1) {
-		dfprintf(stderr, "docsz: %lu\n", route->docsize);
-		if (route->docsize+i >= route->bufsize){
-			dfprintf(stderr, "reallocating, docsz: %lu, i: %lu\n", route->docsize, i);
-			route->buf = xrealloc(route->buf, (route->bufsize*2));
-			route->bufsize *= 2;
-
-			dfprintf(stderr, "setting buf = to buf[%lu]\n", route->docsize);
-			buf = &route->buf[route->docsize]; //for stpcpy, set pointer to the end of the read bytes
-		}
-		route->docsize += i;
-		buf = stpcpy(buf, linebuf);
-	}
-	free(linebuf);
-	if (fclose(ws) == EOF)
-		perror("fclose");
+	close(fd) < 0 ? perror("close") : 0;
 }
 
 /* Route function definitions */
@@ -140,8 +109,8 @@ int
 get_response(const int fd, const struct route *restrict route)
 {
 	char *response;
-
-	dfprintf(stderr, "\nroute name: %s, htbuf type: %s htbuf size: %lu, route docsz: %lu\n",
+	
+	dfprintf(stderr, "\nroute name: %s, route type: %s route size: %lu, route docsz: %lu\n",
 			 route->name, route->mime, route->bufsize, route->docsize);
 
 
@@ -162,11 +131,12 @@ get_response(const int fd, const struct route *restrict route)
 
 
 		response = (char *)xmalloc(route->docsize + 80);
+
 		snprintf(
 			response, route->docsize + 80,
 			"HTTP/1.1 200 OK\nContent-Length: %lu\nContent-Type: %s\n\n%s",
-			route->docsize, route->mime ?: "none", route->buf);
-
+			route->docsize, route->mime, route->buf);
+		
 		dfprintf(stderr, "\nserving client:\n%s\n", response);
 
 		if ((write(fd, response, route->docsize+80) < 0)) {
