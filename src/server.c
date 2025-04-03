@@ -40,9 +40,15 @@ struct route {
 	size_t docsize;
 };
 
+struct request {
+	char *method;
+	char *path;
+	char *protocol;
+};
+
 static void load_file(const char *file, struct route *route);
 static inline int get_response(const int fd, const struct route *route);
-static inline int serve(const char *restrict path, const int fd);
+static inline int serve(struct request req, const int fd);
 static inline int process_request(int filedes, char *buffer);
 static inline int read_from_client(const int filedes);
 
@@ -180,13 +186,13 @@ get_response(const int fd, const struct route *restrict route)
 /* Matches the HTTP request path with a function to serve said path;
  * return values: 1 for no matches, 0 for success, -1 for failure */
 int
-serve(const char *restrict path, const int filedes)
+serve(struct request req, const int filedes)
 {
 	size_t i;
 	int retval = 1;
 	for (i = 0; i < routelen; i++) {
-		dfprintf(stderr, "path: %s; routes[%lu].name = %s\n", path, i, routes[i].name);
-		if (!strcmp(path, routes[i].name)) {
+		dfprintf(stderr, "path: %s; routes[%lu].name = %s\n", req.path, i, routes[i].name);
+		if (!strcmp(req.path, routes[i].name)) {
 			retval = get_response(filedes, &routes[i]);
 			break;
 		}
@@ -199,32 +205,28 @@ int
 process_request(const int filedes, char *buffer)
 {
 	char *token;
-	char *method;
-	char *path;
 
-	const char *delim = " ";
+	struct request req;
+
+	const char *delim = " \r\n";
 	const char *br = "HTTP/1.1 400 Bad Request";
 
 
 	token = strtok(buffer, delim);
-	method = token;
+	req.method = token;
+	dfprintf(stderr,"first token: '%s'\n", token);
 
 	token = strtok(NULL, delim);
 	dfprintf(stderr, "second token: '%s'\n", token);
-	path = token; //second token of start line should contain request path
+	req.path = token;
 
 	token = strtok(NULL, delim);
+	req.protocol = token;
 	dfprintf(stderr, "third token: '%s'\n", token);
-	if (strncmp(token, "HTTP", 4))
-		write(filedes, br, 25) < 0 ? perror("process_request: write") : 0;
-
-	if (!strncmp(method, "GET", 3)) {
-		serve(path, filedes);
-	} else if(!strncmp(method, "POST", 4)){
-		serve(path, filedes);
+	if (!strncmp(token, "HTTP", 4)){
+		serve(req, filedes);
 	} else {
-		if (write(filedes, br, strlen(br)) < 0)
-			perror("process_request: write");
+		write(filedes, br, 25) < 0 ? perror("process_request: write") : 0;
 		return -1;
 	}
 
