@@ -73,6 +73,7 @@ static const size_t routelen = sizeof(routes) / sizeof(struct route);
 void
 load_file(const char *file, struct route *route)
 {
+	/* add dynamic file loading runtime? */
 	int fd;
 	ssize_t i;
 	char *file_type;
@@ -232,26 +233,39 @@ read_from_client(const int filedes)
 	return 0;
 }
 
-/* epoll instance, an in-kernel data structure */
+static inline void help(const char* arg){
+printf("Usage: %s [OPTION] [argument]..\noptions:\n\
+-f, --file		choose root file\n\
+-p, --port		choose the port to which the socket is bound\n\
+-h, --help		display this help information and exit\n", arg);
+}
+
 int
 main(int argc, char *argv[])
 {
 	int sock, conn, nfds, epollfd;
 	struct epoll_event ev, events[MAX_EVENTS];
 
-	int i, c;
-	size_t j;
-
 	struct sockaddr_in clientname;
 	socklen_t addrsize;
 
+	int i, c;
+	size_t j;
+	int optindex;
+
 	char *html;
-    unsigned short PORT;
+   	unsigned short PORT;
 
 	PORT = 8000;
 	html = "index.html";
-
-	while ((c = getopt(argc, argv, "p:f:")) != -1)
+	
+	static const struct option longopts[] = {
+		{"help", no_argument, 0, 'h'},
+		{"file", required_argument, 0, 'f'},
+		{"port", required_argument, 0, 'p'},
+	};
+	optindex = 0;
+	while ((c = getopt_long(argc, argv, "p:f:", longopts, &optindex)) != -1)
 		switch (c) {
 		case 'f':
 			html = optarg;
@@ -259,9 +273,12 @@ main(int argc, char *argv[])
 		case 'p':
 			PORT = (unsigned short)strtoul(optarg, NULL, 10);
 			break;
+		case 'h':
+			help(argv[0]);
+			return 0;
 		case '?':
 			puts("Unknown argument");
-			//help();
+			help(argv[0]);
 			exit(EXIT_FAILURE);
 		}
 
