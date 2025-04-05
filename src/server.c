@@ -29,7 +29,7 @@
 #define dfprintf fprintf
 #endif
 #ifndef DEBUG
-static void dfprintf(FILE *restrict stream, const char *restrict format, ...) {NULL;}
+#define dfprintf(x, y, ...)
 #endif
 
 struct route {
