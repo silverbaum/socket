@@ -23,7 +23,8 @@
 
 #define MAXMSG 2048
 #define MAX_EVENTS 1024
-#define DEFAULT_BUFSIZE 4096
+#define DEFAULT_BUFSIZE 8192
+#define ROOTDIR "."
 
 #define route(routename, mimetype) {.name=routename, .mime=mimetype}
 
@@ -34,45 +35,15 @@
 #define dfprintf(x, y, ...)
 #endif
 
-struct route {
-	char *name;
-	char *mime;
-	char *buf;
-	size_t bufsize;
-	size_t docsize;
-};
-
-struct request {
-	char *method;
-	char *path;
-	char *protocol;
-};
-
+static inline int get_response(const int fd, const char *path);
 static inline int process_request(int filedes, char *buffer);
 static inline int read_from_client(const int filedes);
+static inline void help(const char *arg);
 
-/* Add accepted routes here */
-static struct route routes[] = {
-    {.name = "/", .mime = "text/html"},
-    {.name = "/index.js", .mime = "text/javascript"},
-    {.name = "/img.png", .mime = "image/png"},
-};
-/* TODO: adding routes that arent filenames requires manual loading,
- * separation between filename and route name (add struct field?) 
- * + loading files in runtime*/
-
-static const size_t routelen = sizeof(routes) / sizeof(struct route);
-
-/*
- * Load HTML files into memory for a particular route
- * file: the name of the html file to be loaded,
- * route: pointer to the route struct to which the file should be connected
- */
 
 int
 get_response(const int fd, const char *path)
 {
-	dfprintf(stderr, "get_response\npath: %s\n\n", &path[1]);
 	DIR *cwd = 0;
 	struct dirent *entry;
 	int content;
@@ -83,26 +54,37 @@ get_response(const int fd, const char *path)
 	char *buf;
 	char *mime;
 	char response[100];
-	char *file_name;
+	const char *file_name;
+	const char *notfound;
 
-	if(!strncmp(path, "/", strlen(path))){
-		dfprintf(stderr, "index\n");
+	notfound = "HTTP/1.1 404 Not Found\nContent-Type: text/html\nContent-Length:87\n\n\
+<!doctype html><head><title>Not Found</title></head><body><h1>404 Not Found</h1></body>";
+
+
+	if (!strcmp(path, "/")){
 		content = open("index.html", O_RDONLY);
 		file_name = "index.html";
 	} else {
-	cwd = opendir(".");
-	while((entry = readdir(cwd)) != NULL)
-		if ((strstr(entry->d_name, &path[1])) != NULL) {
-			dfprintf(stderr, "entry: %s, path: %s", entry->d_name, &path[1]);
-			content = open(entry->d_name, O_RDONLY);
-			break;
+		content = 0;
+		cwd = opendir(ROOTDIR);
+		while ((entry = readdir(cwd)) != NULL)
+			if ((!strncmp(entry->d_name, &path[1], strlen(&path[1])))) {
+				dfprintf(stderr, "entry: %s, path: %s\n", entry->d_name, &path[1]);
+				content = open(entry->d_name, O_RDONLY);
+				if (!content){
+					perror("readdir");
+					return -1;
+				}
+				break;
 			}
 
-	file_name = strchr(&path[1], '.');
-	if(!content){
-		perror("readdir");
-		return -1;
-	}
+		file_name = &path[1];
+		if (!content){
+			if (write(fd, notfound, 154) < 0)
+				perror("write");
+			return -1;
+		}
+
 	}
 
 
@@ -162,29 +144,27 @@ int
 process_request(const int filedes, char *buffer)
 {
 	char *token;
-
-	struct request req;
-
+	char *method, *path, *protocol;
 	const char *delim = " \r\n";
 	const char *br = "HTTP/1.1 400 Bad Request";
 
 
 	token = strtok(buffer, delim);
-	req.method = token;
+	method = token;
 	dfprintf(stderr,"first token: '%s'\n", token);
 
 	token = strtok(NULL, delim);
 	dfprintf(stderr, "second token: '%s'\n", token);
-	req.path = token;
+	path = token;
 
 	token = strtok(NULL, delim);
-	req.protocol = token;
+	protocol = token;
 	dfprintf(stderr, "third token: '%s'\n", token);
 
 	/* Here add strstr and strtok to find the accepted types */
 
-	if (!strncmp(req.protocol, "HTTP", 4)){
-		!strncmp(req.method, "GET", 3) ? get_response(filedes, req.path) : 0;
+	if (!strncmp(protocol, "HTTP", 4)){
+		!strncmp(method, "GET", 3) ? get_response(filedes, path) : 0;
 
 	} else {
 		write(filedes, br, 25) < 0 ? perror("process_request: write") : 0;
@@ -222,7 +202,8 @@ read_from_client(const int filedes)
 	return 0;
 }
 
-static inline void help(const char* arg){
+void
+help(const char* arg){
 printf("Usage: %s [OPTION] [argument]..\noptions:\n\
 -p, --port		choose the port to which the socket is bound\n\
 -h, --help		display this help information and exit\n", arg);
