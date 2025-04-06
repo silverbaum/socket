@@ -11,12 +11,10 @@
 #include <sys/socket.h>
 #include <sys/epoll.h>
 #include <netinet/in.h>
-#include <netdb.h>
 #include <arpa/inet.h>
 #include <string.h>
-#include <aio.h>
+//#include <aio.h>
 #include <getopt.h>
-#include <dirent.h>
 
 #include "sock.h"
 #include "util.h"
@@ -24,9 +22,6 @@
 #define MAXMSG 2048
 #define MAX_EVENTS 1024
 #define DEFAULT_BUFSIZE 8192
-#define ROOTDIR "."
-
-#define route(routename, mimetype) {.name=routename, .mime=mimetype}
 
 #ifdef DEBUG
 #define dfprintf fprintf
@@ -64,7 +59,7 @@ get_response(const int fd, const char *path)
 	}
 
 	if (!strcmp(path, "/")){
-		content = open("index.html", O_RDONLY);
+		content = open("index.html", O_RDONLY, O_NONBLOCK);
 		file_name = "index.html";
 	} else {
 		file_name = &path[1];
@@ -77,9 +72,6 @@ get_response(const int fd, const char *path)
 		}
 
 	}
-
-
-
 
 	dfprintf(stderr, "extension: %s\n", file_name);
 
@@ -109,7 +101,6 @@ get_response(const int fd, const char *path)
 			 docsize, mime);
 
 	dfprintf(stderr, "serving client,\n%s\n\n", response);
-	write(1, buf, docsize);
 
 	if ((write(fd, response, strlen(response))) < 0 ||
 		(write(fd, buf, docsize)) < 0){
@@ -134,8 +125,7 @@ process_request(const int filedes, char *buffer)
 	char *token;
 	char *method, *path, *protocol;
 	const char *delim = " \r\n";
-	const char *br = "HTTP/1.1 400 Bad Request";
-
+	const char *br = "HTTP/1.1 400 Bad Request\n";
 
 	token = strtok(buffer, delim);
 	method = token;
@@ -149,18 +139,23 @@ process_request(const int filedes, char *buffer)
 	protocol = token;
 	dfprintf(stderr, "third token: '%s'\n", token);
 
-	/* Here add strstr and strtok to find the accepted types */
-
+	if(!protocol || !path || !method){
+		fprintf(stderr, "Null tokens, bad request\n");
+		goto bad_request;
+	}
+	/* add strstr and strtok to find the accepted types? */
 	if (!strncmp(protocol, "HTTP", 4)){
 		!strncmp(method, "GET", 3) ? get_response(filedes, path) : 0;
 
 	} else {
-		write(filedes, br, 25) < 0 ? perror("process_request: write") : 0;
+		bad_request:
+		write(filedes, br, 26) < 0 ? perror("process_request: write") : 0;
 		return -1;
 	}
 
 	return 0;
 }
+
 
 int
 read_from_client(const int filedes)
@@ -171,7 +166,8 @@ read_from_client(const int filedes)
 	nbytes = read(filedes, buffer, MAXMSG);
 	if (nbytes < 0) {
 		/* Read error. */
-		die("read");
+		perror("read");
+		return -1;
 
 	} else if (nbytes == 0) {
 		/* End-of-file. */
@@ -180,13 +176,13 @@ read_from_client(const int filedes)
 	} else {
 		if (nbytes + 1 < MAXMSG)
 			buffer[nbytes + 1] = '\0';
-		fprintf(stderr, "Server: got message: `%s'\n", buffer);
+		fprintf(stderr, "Server: got message of length %lu : `%s'\n", nbytes, buffer);
 		if (process_request(filedes, buffer) < 0) {
 			free(buffer);
-			return 1;
+			return -1;
 		}
 	}
-
+	free(buffer);
 	return 0;
 }
 
