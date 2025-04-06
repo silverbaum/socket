@@ -44,8 +44,6 @@ static inline void help(const char *arg);
 int
 get_response(const int fd, const char *path)
 {
-	DIR *cwd = 0;
-	struct dirent *entry;
 	int content;
 
 	size_t docsize;
@@ -61,25 +59,18 @@ get_response(const int fd, const char *path)
 <!doctype html><head><title>Not Found</title></head><body><h1>404 Not Found</h1></body>";
 
 
+	if(strstr(path, "..") || strstr(path, "//")) {
+		goto notfound;
+	}
+
 	if (!strcmp(path, "/")){
 		content = open("index.html", O_RDONLY);
 		file_name = "index.html";
 	} else {
-		content = 0;
-		cwd = opendir(ROOTDIR);
-		while ((entry = readdir(cwd)) != NULL)
-			if ((!strncmp(entry->d_name, &path[1], strlen(&path[1])))) {
-				dfprintf(stderr, "entry: %s, path: %s\n", entry->d_name, &path[1]);
-				content = open(entry->d_name, O_RDONLY);
-				if (!content){
-					perror("readdir");
-					return -1;
-				}
-				break;
-			}
-
 		file_name = &path[1];
-		if (!content){
+		content = open(file_name, O_RDONLY, O_NONBLOCK);
+		if (content < 0){
+			notfound:
 			if (write(fd, notfound, 154) < 0)
 				perror("write");
 			return -1;
@@ -129,9 +120,6 @@ get_response(const int fd, const char *path)
 
 	free(buf);
 	close(content);
-	if(cwd)
-		if(closedir(cwd) < 0)
-			perror("closedir");
 	return 0;
 }
 
