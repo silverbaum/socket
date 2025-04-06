@@ -16,6 +16,7 @@
 #include <string.h>
 #include <aio.h>
 #include <getopt.h>
+#include <dirent.h>
 
 #include "sock.h"
 #include "util.h"
@@ -47,9 +48,6 @@ struct request {
 	char *protocol;
 };
 
-static void load_file(const char *file, struct route *route);
-static inline int get_response(const int fd, const struct route *route);
-static inline int serve(struct request req, const int fd);
 static inline int process_request(int filedes, char *buffer);
 static inline int read_from_client(const int filedes);
 
@@ -71,84 +69,87 @@ static const size_t routelen = sizeof(routes) / sizeof(struct route);
  * route: pointer to the route struct to which the file should be connected
  */
 
-void
-load_file(const char *file, struct route *route)
-{
-	/* add dynamic file loading runtime? */
-	int fd;
-	ssize_t i;
-	char *file_type;
-
-	route->docsize = 0;
-	route->buf = (char *)xmalloc(DEFAULT_BUFSIZE);
-	route->bufsize = DEFAULT_BUFSIZE;
-
-	if (!route->mime)
-		asprintf(&route->mime, "None");
-		
-
-	fd = open(file, O_RDONLY);
-	if (fd < 0) {
-		fprintf(stderr, "Failed to open %s\n", file);
-		perror(" open");
-		return;
-	}
-
-	file_type = strchr(file, '.');
-	dfprintf(stderr, "extension: %s\n", file_type);
-	
-	for(i=0; (read(fd, &route->buf[i], 1)) > 0; i++, route->docsize++)
-		if(route->docsize+1 >= route->bufsize){
-				dfprintf(stderr, "reallocating, docsz: %lu, i: %lu\n", route->docsize, i);
-				route->buf = xrealloc(route->buf, route->bufsize*=2);
-		}
-
-	close(fd) < 0 ? perror("close") : 0;
-}
-
 int
-get_response(const int fd, const struct route *restrict route)
+get_response(const int fd, const char *path)
 {
-	char *response;
-	
-	dfprintf(stderr, "\nroute name: %s, route type: %s route size: %lu, route docsz: %lu\n",
-			 route->name, route->mime, route->bufsize, route->docsize);
+	dfprintf(stderr, "get_response\npath: %s\n\n", &path[1]);
+	DIR *cwd = 0;
+	struct dirent *entry;
+	int content;
 
+	size_t docsize;
+	size_t bufsize;
+	size_t i;
+	char *buf;
+	char *mime;
+	char response[100];
+	char *file_name;
 
-	if (!strncmp(route->mime, "image", 5)) {
-		response = xmalloc(75);
-		snprintf(response, 75, "HTTP/1.1 200 OK\nContent-Length: %lu\nContent-Type: %s\n\n",
-				 route->docsize, route->mime);
-
-		dfprintf(stderr, "serving client image,\n%s\n\n", response);
-
-		if ((write(fd, response, strlen(response))) < 0 ||
-			(write(fd, route->buf, route->docsize)) < 0){
-			perror("get_response: write");
-			return -1;
-		}
-
+	if(!strncmp(path, "/", strlen(path))){
+		dfprintf(stderr, "index\n");
+		content = open("index.html", O_RDONLY);
+		file_name = "index.html";
 	} else {
+	cwd = opendir(".");
+	while((entry = readdir(cwd)) != NULL)
+		if ((strstr(entry->d_name, &path[1])) != NULL) {
+			dfprintf(stderr, "entry: %s, path: %s", entry->d_name, &path[1]);
+			content = open(entry->d_name, O_RDONLY);
+			break;
+			}
 
-
-		response = (char *)xmalloc(route->docsize + 80);
-
-		snprintf(
-			response, route->docsize + 80,
-			"HTTP/1.1 200 OK\nContent-Length: %lu\nContent-Type: %s\n\n%s",
-			route->docsize, route->mime, route->buf);
-		
-		dfprintf(stderr, "\nserving client:\n%s\n", response);
-
-		if ((write(fd, response, route->docsize+80) < 0)) {
-			perror("get_response: write");
-			return -1;
-		}
-
+	file_name = strchr(&path[1], '.');
+	if(!content){
+		perror("readdir");
+		return -1;
+	}
 	}
 
 
-	free(response);
+
+
+	dfprintf(stderr, "extension: %s\n", file_name);
+
+	if(strstr(file_name, ".html"))
+		asprintf(&mime, "text/html");
+	else if(strstr(file_name, ".png"))
+		asprintf(&mime, "image/png");
+	else if(strstr(file_name, ".js"))
+		asprintf(&mime, "text/javascript");
+	else{
+		asprintf(&mime, "None");
+	}
+
+
+
+	docsize = 0;
+	bufsize = DEFAULT_BUFSIZE;
+	buf = (char *)xmalloc(DEFAULT_BUFSIZE);
+
+	for(i=0; (read(content, &buf[i], 1)) > 0; i++, docsize++)
+		if(docsize+1 >= bufsize){
+			dfprintf(stderr, "reallocating, docsz: %lu, i: %lu\n", docsize, i);
+			buf = xrealloc(buf, bufsize*=2);
+		}
+
+	snprintf(response, 80, "HTTP/1.1 200 OK\nContent-Length: %lu\nContent-Type: %s\n\n",
+			 docsize, mime);
+
+	dfprintf(stderr, "serving client,\n%s\n\n", response);
+	write(1, buf, docsize);
+
+	if ((write(fd, response, strlen(response))) < 0 ||
+		(write(fd, buf, docsize)) < 0){
+		perror("get_response: write");
+		return -1;
+	}
+
+
+	free(buf);
+	close(content);
+	if(cwd)
+		if(closedir(cwd) < 0)
+			perror("closedir");
 	return 0;
 }
 
@@ -156,21 +157,6 @@ get_response(const int fd, const struct route *restrict route)
 
 /* Matches the HTTP request path with a function to serve said path;
  * return values: 1 for no matches, 0 for success, -1 for failure */
-int
-serve(struct request req, const int filedes)
-{
-	size_t i;
-	int retval = 1;
-	for (i = 0; i < routelen; i++) {
-		dfprintf(stderr, "path: %s; routes[%lu].name = %s\n", req.path, i, routes[i].name);
-		if (!strcmp(req.path, routes[i].name)) {
-			retval = get_response(filedes, &routes[i]);
-			break;
-		}
-	}
-
-	return retval;
-}
 
 int
 process_request(const int filedes, char *buffer)
@@ -194,8 +180,12 @@ process_request(const int filedes, char *buffer)
 	token = strtok(NULL, delim);
 	req.protocol = token;
 	dfprintf(stderr, "third token: '%s'\n", token);
-	if (!strncmp(token, "HTTP", 4)){
-		serve(req, filedes);
+
+	/* Here add strstr and strtok to find the accepted types */
+
+	if (!strncmp(req.protocol, "HTTP", 4)){
+		!strncmp(req.method, "GET", 3) ? get_response(filedes, req.path) : 0;
+
 	} else {
 		write(filedes, br, 25) < 0 ? perror("process_request: write") : 0;
 		return -1;
@@ -234,7 +224,6 @@ read_from_client(const int filedes)
 
 static inline void help(const char* arg){
 printf("Usage: %s [OPTION] [argument]..\noptions:\n\
--f, --file		choose root file\n\
 -p, --port		choose the port to which the socket is bound\n\
 -h, --help		display this help information and exit\n", arg);
 }
@@ -249,15 +238,12 @@ main(int argc, char *argv[])
 	socklen_t addrsize;
 
 	int i, c;
-	size_t j;
 	int optindex;
 
-	char *html;
    	unsigned short PORT;
 
 	PORT = 8000;
-	html = "index.html";
-	
+
 	static const struct option longopts[] = {
 		{"help", no_argument, 0, 'h'},
 		{"file", required_argument, 0, 'f'},
@@ -267,7 +253,6 @@ main(int argc, char *argv[])
 	while ((c = getopt_long(argc, argv, "p:f:", longopts, &optindex)) != -1)
 		switch (c) {
 		case 'f':
-			html = optarg;
 			break;
 		case 'p':
 			PORT = (unsigned short)strtoul(optarg, NULL, 10);
@@ -280,15 +265,6 @@ main(int argc, char *argv[])
 			help(argv[0]);
 			exit(EXIT_FAILURE);
 		}
-
-
-	/* Read files to memory */
-	char *rn;
-	load_file(html, &routes[0]);
-	for(j=1; j<routelen; j++){
-		rn = &routes[j].name[1];
-		load_file(rn, &routes[j]);
-	}
 
 
 	/* Create the socket and set it up to accept connections. */
