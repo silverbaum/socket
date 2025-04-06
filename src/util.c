@@ -28,3 +28,9 @@ xmalloc(size_t size)
 	return ptr;
 }
 
+void
+die(const char* msg)
+{
+	perror(msg);
+	exit(1);
+}

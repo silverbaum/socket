@@ -24,6 +24,7 @@
 #define MAX_EVENTS 1024
 #define DEFAULT_BUFSIZE 4096
 
+#define route(routename, mimetype) {.name=routename, .mime=mimetype}
 
 #ifdef DEBUG
 #define dfprintf fprintf
@@ -53,10 +54,10 @@ static inline int process_request(int filedes, char *buffer);
 static inline int read_from_client(const int filedes);
 
 /* Add accepted routes here */
-static struct route routes[] ={
-{.name="/", .mime="text/html"},
-{.name="/index.js", .mime="text/javascript"},
-{.name="/img.png", .mime="image/png"}
+static struct route routes[] = {
+    {.name = "/", .mime = "text/html"},
+    {.name = "/index.js", .mime = "text/javascript"},
+    {.name = "/img.png", .mime = "image/png"},
 };
 /* TODO: adding routes that arent filenames requires manual loading,
  * separation between filename and route name (add struct field?) 
@@ -105,7 +106,6 @@ load_file(const char *file, struct route *route)
 	close(fd) < 0 ? perror("close") : 0;
 }
 
-/* Route function definitions */
 int
 get_response(const int fd, const struct route *restrict route)
 {
@@ -213,8 +213,7 @@ read_from_client(const int filedes)
 	nbytes = read(filedes, buffer, MAXMSG);
 	if (nbytes < 0) {
 		/* Read error. */
-		perror("read");
-		exit(EXIT_FAILURE);
+		die("read");
 
 	} else if (nbytes == 0) {
 		/* End-of-file. */
